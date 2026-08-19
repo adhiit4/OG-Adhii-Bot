@@ -1671,13 +1671,33 @@ class Ticket(discord.ui.View):
         emoji="🎫",
         custom_id="og_ticket"
     )
-    async def create_ticket(
-        self,
-        interaction,
-        button
-    ):
+    async def create_ticket(self, interaction, button):
 
         try:
+            guild_id = gid(interaction.guild)
+            setup = D["ticket_setup"].get(guild_id)
+
+            if not setup:
+                return await reply(
+                    interaction,
+                    "❌ Ticket system is not configured.\nUse `/setupsupport` first.",
+                    ephemeral=True
+                )
+
+            category = interaction.guild.get_channel(
+                int(setup["category"])
+            )
+
+            if not category or not isinstance(
+                category,
+                discord.CategoryChannel
+            ):
+                return await reply(
+                    interaction,
+                    "❌ Ticket category not found.",
+                    ephemeral=True
+                )
+
             name = f"ticket-{interaction.user.id}"
 
             old = discord.utils.get(
@@ -1701,36 +1721,68 @@ class Ticket(discord.ui.View):
                 interaction.user:
                     discord.PermissionOverwrite(
                         view_channel=True,
-                        send_messages=True
+                        send_messages=True,
+                        read_message_history=True
                     ),
 
                 interaction.guild.me:
                     discord.PermissionOverwrite(
                         view_channel=True,
                         send_messages=True,
+                        read_message_history=True,
                         manage_channels=True
                     )
             }
 
+            # Allow staff/support roles if configured
+            for role in interaction.guild.roles:
+                if (
+                    role.name.lower() in [
+                        "staff",
+                        "support",
+                        "moderator",
+                        "admin"
+                    ]
+                ):
+                    overwrites[role] = discord.PermissionOverwrite(
+                        view_channel=True,
+                        send_messages=True,
+                        read_message_history=True
+                    )
+
             channel = await interaction.guild.create_text_channel(
-                name,
-                overwrites=overwrites
+                name=name,
+                category=category,
+                overwrites=overwrites,
+                reason=f"Ticket opened by {interaction.user}"
             )
 
-            D["tickets"][str(channel.id)] = (
-                interaction.user.id
-            )
+            D["tickets"][str(channel.id)] = {
+                "user": interaction.user.id,
+                "created": datetime.now(timezone.utc).isoformat()
+            }
 
             save()
 
+            embed = discord.Embed(
+                title="🎫 Support Ticket",
+                description=(
+                    f"Welcome {interaction.user.mention}!\n\n"
+                    "Please explain your issue clearly.\n"
+                    "A staff member will assist you shortly."
+                ),
+                color=discord.Color.blurple()
+            )
+
             await channel.send(
-                f"🎫 {interaction.user.mention} "
-                f"ticket opened."
+                content=interaction.user.mention,
+                embed=embed,
+                view=CloseTicket()
             )
 
             await reply(
                 interaction,
-                f"Created {channel.mention}",
+                f"🎫 Ticket created: {channel.mention}",
                 ephemeral=True
             )
 
@@ -1751,31 +1803,197 @@ class Ticket(discord.ui.View):
             )
 
 
+class CloseTicket(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Close Ticket",
+        style=discord.ButtonStyle.danger,
+        emoji="🔒",
+        custom_id="og_close_ticket"
+    )
+    async def close_ticket(self, interaction, button):
+
+        try:
+            channel = interaction.channel
+
+            if not channel.id.__str__() in D["tickets"]:
+                return await reply(
+                    interaction,
+                    "❌ This is not a ticket channel.",
+                    ephemeral=True
+                )
+
+            if not (
+                interaction.user.guild_permissions.manage_channels
+                or D["tickets"][str(channel.id)].get("user")
+                == interaction.user.id
+            ):
+                return await reply(
+                    interaction,
+                    "❌ You cannot close this ticket.",
+                    ephemeral=True
+                )
+
+            await reply(
+                interaction,
+                "🔒 Closing ticket...",
+                ephemeral=True
+            )
+
+            D["tickets"].pop(str(channel.id), None)
+            save()
+
+            await channel.delete(
+                reason=f"Ticket closed by {interaction.user}"
+            )
+
+        except discord.Forbidden:
+            await reply(
+                interaction,
+                "❌ I cannot delete this ticket channel.",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            print("CLOSE TICKET ERROR:", repr(e))
+
+
+# =========================
+# SETUP SUPPORT SYSTEM
+# =========================
+
 @tree.command(
-    name="ticket",
-    description="Send ticket panel"
+    name="setupsupport",
+    description="Create complete ticket support system"
 )
 @app_commands.checks.has_permissions(
     manage_channels=True
 )
-async def ticket(interaction):
+async def setupsupport(interaction):
 
-    embed = discord.Embed(
-        title="🎫 Support",
-        description="Click below to open a private ticket.",
-        color=discord.Color.blurple()
-    )
+    guild = interaction.guild
 
-    await interaction.channel.send(
-        embed=embed,
-        view=Ticket()
-    )
+    try:
 
-    await reply(
-        interaction,
-        "Panel sent.",
-        ephemeral=True
-    )
+        # -------------------------
+        # SUPPORT CATEGORY
+        # -------------------------
+
+        category = discord.utils.get(
+            guild.categories,
+            name="🆘 SUPPORT"
+        )
+
+        if not category:
+
+            category = await guild.create_category(
+                "🆘 SUPPORT",
+                reason=f"Support setup by {interaction.user}"
+            )
+
+        # -------------------------
+        # CREATE TICKET CHANNEL
+        # -------------------------
+
+        ticket_channel = discord.utils.get(
+            guild.text_channels,
+            name="🎫・create-ticket"
+        )
+
+        if not ticket_channel:
+
+            ticket_channel = await guild.create_text_channel(
+                "🎫・create-ticket",
+                category=category,
+                reason="Support ticket setup"
+            )
+
+        # -------------------------
+        # SUPPORT VC
+        # -------------------------
+
+        support_vc = discord.utils.get(
+            guild.voice_channels,
+            name="🔊・Support VC"
+        )
+
+        if not support_vc:
+
+            support_vc = await guild.create_voice_channel(
+                "🔊・Support VC",
+                category=category,
+                reason="Support VC setup"
+            )
+
+        # -------------------------
+        # SAVE SETUP
+        # -------------------------
+
+        D["ticket_setup"][gid(guild)] = {
+            "category": category.id,
+            "ticket_channel": ticket_channel.id,
+            "support_vc": support_vc.id
+        }
+
+        save()
+
+        # -------------------------
+        # PANEL
+        # -------------------------
+
+        embed = discord.Embed(
+            title="🎫 Support Center",
+            description=(
+                "**Need help? Open a ticket.**\n\n"
+                "Click the button below to create a private "
+                "support ticket.\n\n"
+                "🎫 **Create Ticket**\n"
+                "🔒 Private staff support\n"
+                "🔊 Support VC available"
+            ),
+            color=discord.Color.blurple()
+        )
+
+        embed.set_footer(
+            text=f"{guild.name} • Support System"
+        )
+
+        await ticket_channel.send(
+            embed=embed,
+            view=Ticket()
+        )
+
+        # -------------------------
+        # RESPONSE
+        # -------------------------
+
+        await reply(
+            interaction,
+            "✅ Support system setup completed!\n\n"
+            f"📁 Category: {category.mention}\n"
+            f"🎫 Ticket: {ticket_channel.mention}\n"
+            f"🔊 Support VC: {support_vc.mention}",
+            ephemeral=True
+        )
+
+    except discord.Forbidden:
+        await reply(
+            interaction,
+            "❌ I need **Manage Channels** permission.",
+            ephemeral=True
+        )
+
+    except Exception as e:
+        print("SUPPORT SETUP ERROR:", repr(e))
+
+        await reply(
+            interaction,
+            f"❌ Setup failed: `{type(e).__name__}`",
+            ephemeral=True
+        )
 
 
 # =========================
