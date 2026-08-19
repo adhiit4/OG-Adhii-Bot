@@ -42,6 +42,7 @@ DEFAULT_DATA = {
     "antispam": {},
     "verify": {},
     "tickets": {},
+    "ticket_setup": {},
 }
 
 for key, value in DEFAULT_DATA.items():
@@ -683,7 +684,6 @@ async def warn(
     reason: str = "No reason provided"
 ):
 
-    # Server-specific warning
     key = f"{gid(interaction.guild)}:{member.id}"
 
     D["warns"][key] = (
@@ -791,10 +791,7 @@ async def lock(
             ephemeral=True
         )
 
-    if not channel.permissions_for(
-        me
-    ).manage_channels:
-
+    if not channel.permissions_for(me).manage_channels:
         return await reply(
             interaction,
             "❌ I need **Manage Channels** permission.",
@@ -864,10 +861,7 @@ async def unlock(
             ephemeral=True
         )
 
-    if not channel.permissions_for(
-        me
-    ).manage_channels:
-
+    if not channel.permissions_for(me).manage_channels:
         return await reply(
             interaction,
             "❌ I need **Manage Channels** permission.",
@@ -1530,7 +1524,6 @@ async def calculator(
     expression: str
 ):
 
-    # Only basic calculator characters
     if not re.fullmatch(
         r"[0-9+\-*/(). %]+",
         expression
@@ -1675,12 +1668,14 @@ class Ticket(discord.ui.View):
 
         try:
             guild_id = gid(interaction.guild)
-            setup = D["ticket_setup"].get(guild_id)
+
+            setup = D.get("ticket_setup", {}).get(guild_id)
 
             if not setup:
                 return await reply(
                     interaction,
-                    "❌ Ticket system is not configured.\nUse `/setupsupport` first.",
+                    "❌ Ticket system is not configured.\n"
+                    "Use `/setupsupport` first.",
                     ephemeral=True
                 )
 
@@ -1734,16 +1729,14 @@ class Ticket(discord.ui.View):
                     )
             }
 
-            # Allow staff/support roles if configured
+            # Staff / support roles
             for role in interaction.guild.roles:
-                if (
-                    role.name.lower() in [
-                        "staff",
-                        "support",
-                        "moderator",
-                        "admin"
-                    ]
-                ):
+                if role.name.lower() in [
+                    "staff",
+                    "support",
+                    "moderator",
+                    "admin"
+                ]:
                     overwrites[role] = discord.PermissionOverwrite(
                         view_channel=True,
                         send_messages=True,
@@ -1759,7 +1752,9 @@ class Ticket(discord.ui.View):
 
             D["tickets"][str(channel.id)] = {
                 "user": interaction.user.id,
-                "created": datetime.now(timezone.utc).isoformat()
+                "created": datetime.now(
+                    timezone.utc
+                ).isoformat()
             }
 
             save()
@@ -1798,7 +1793,8 @@ class Ticket(discord.ui.View):
 
             await reply(
                 interaction,
-                "❌ Could not create ticket.",
+                f"❌ Could not create ticket.\n"
+                f"`{type(e).__name__}`",
                 ephemeral=True
             )
 
@@ -1819,7 +1815,11 @@ class CloseTicket(discord.ui.View):
         try:
             channel = interaction.channel
 
-            if not channel.id.__str__() in D["tickets"]:
+            ticket_data = D["tickets"].get(
+                str(channel.id)
+            )
+
+            if not ticket_data:
                 return await reply(
                     interaction,
                     "❌ This is not a ticket channel.",
@@ -1828,7 +1828,7 @@ class CloseTicket(discord.ui.View):
 
             if not (
                 interaction.user.guild_permissions.manage_channels
-                or D["tickets"][str(channel.id)].get("user")
+                or ticket_data.get("user")
                 == interaction.user.id
             ):
                 return await reply(
@@ -1843,7 +1843,11 @@ class CloseTicket(discord.ui.View):
                 ephemeral=True
             )
 
-            D["tickets"].pop(str(channel.id), None)
+            D["tickets"].pop(
+                str(channel.id),
+                None
+            )
+
             save()
 
             await channel.delete(
@@ -1858,7 +1862,10 @@ class CloseTicket(discord.ui.View):
             )
 
         except Exception as e:
-            print("CLOSE TICKET ERROR:", repr(e))
+            print(
+                "CLOSE TICKET ERROR:",
+                repr(e)
+            )
 
 
 # =========================
@@ -1888,7 +1895,6 @@ async def setupsupport(interaction):
         )
 
         if not category:
-
             category = await guild.create_category(
                 "🆘 SUPPORT",
                 reason=f"Support setup by {interaction.user}"
@@ -1904,7 +1910,6 @@ async def setupsupport(interaction):
         )
 
         if not ticket_channel:
-
             ticket_channel = await guild.create_text_channel(
                 "🎫・create-ticket",
                 category=category,
@@ -1921,7 +1926,6 @@ async def setupsupport(interaction):
         )
 
         if not support_vc:
-
             support_vc = await guild.create_voice_channel(
                 "🔊・Support VC",
                 category=category,
@@ -1931,6 +1935,8 @@ async def setupsupport(interaction):
         # -------------------------
         # SAVE SETUP
         # -------------------------
+
+        D.setdefault("ticket_setup", {})
 
         D["ticket_setup"][gid(guild)] = {
             "category": category.id,
@@ -1987,11 +1993,15 @@ async def setupsupport(interaction):
         )
 
     except Exception as e:
-        print("SUPPORT SETUP ERROR:", repr(e))
+        print(
+            "SUPPORT SETUP ERROR:",
+            repr(e)
+        )
 
         await reply(
             interaction,
-            f"❌ Setup failed: `{type(e).__name__}`",
+            f"❌ Setup failed: `{type(e).__name__}`\n"
+            f"Check the bot permissions.",
             ephemeral=True
         )
 
@@ -2067,7 +2077,10 @@ class Verify(discord.ui.View):
             )
 
         except Exception as e:
-            print("VERIFY ERROR:", repr(e))
+            print(
+                "VERIFY ERROR:",
+                repr(e)
+            )
 
             await reply(
                 interaction,
@@ -2261,13 +2274,17 @@ async def help_command(interaction):
 async def setup_hook():
 
     bot.add_view(Ticket())
+    bot.add_view(CloseTicket())
     bot.add_view(Verify())
 
     try:
         await tree.sync()
         print("Slash commands synced.")
     except Exception as e:
-        print("SETUP SYNC ERROR:", repr(e))
+        print(
+            "SETUP SYNC ERROR:",
+            repr(e)
+        )
 
 
 # =========================
