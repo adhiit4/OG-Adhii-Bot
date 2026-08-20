@@ -944,7 +944,8 @@ async def slowmode(
 
     except Exception as e:
 
-        await reply(
-            interaction,
-            f"❌ Failed: `{type(e).__name__}`",
-            ephemeral=Tru
+    await reply(
+        interaction,
+        f"❌ Failed: `{type(e).__name__}`",
+        ephemeral=True
+    )
