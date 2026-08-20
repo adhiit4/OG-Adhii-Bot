@@ -35,7 +35,6 @@ DEFAULT_DATA = {
     "tickets": {},
     "ticket_setup": {},
     "voice": {},
-    "level_channel": {},
 }
 
 try:
@@ -99,14 +98,7 @@ async def log(guild, title, text, color=discord.Color.blurple()):
         print("LOG ERROR:", repr(e))
 
 def xp_level(xp):
-    return int((max(0, xp) / 100) ** 0.5)
-
-def xp_for_level(level):
-    return level * level * 100
-
-def xp_to_next_level(xp):
-    level = xp_level(xp)
-    return max(0, xp_for_level(level + 1) - xp)
+    return int((xp / 100) ** 0.5)
 
 # =========================================================
 # READY / STARTUP
@@ -119,26 +111,9 @@ async def on_ready():
 
     # Reconnect to every server's saved 24/7 voice channel after a restart.
     for guild_id, channel_id in D.get("voice", {}).items():
-        try:
-            guild = bot.get_guild(int(guild_id))
-            if not guild:
-                continue
-
-            channel = guild.get_channel(int(channel_id))
-            if not isinstance(channel, discord.VoiceChannel):
-                continue
-
-            voice_client = guild.voice_client
-            if voice_client and voice_client.is_connected():
-                continue
-
-            if voice_client:
-                await voice_client.disconnect(force=True)
-
-            await channel.connect(reconnect=True)
-            print(f"24/7 VC CONNECTED: {guild.name} -> {channel.name}")
-        except Exception as e:
-            print(f"24/7 VC ERROR [{guild_id}]:", repr(e))
+        guild = bot.get_guild(int(guild_id))
+        if guild:
+            await reconnect_saved_vc(guild, channel_id)
 
 # =========================================================
 # MEMBER EVENTS
@@ -322,38 +297,21 @@ async def on_message(message):
             queue.clear()
             return
 
-    # XP / LEVELING
+    # XP
     key = f"{guild_id}:{message.author.id}"
     old_xp = int(D["xp"].get(key, 0))
     new_xp = old_xp + random.randint(5, 15)
     D["xp"][key] = new_xp
 
-    old_level = xp_level(old_xp)
-    new_level = xp_level(new_xp)
-
-    if new_level > old_level:
+    if xp_level(new_xp) > xp_level(old_xp):
         try:
-            level_channel_id = D["level_channel"].get(guild_id)
-            level_channel = message.guild.get_channel(int(level_channel_id)) if level_channel_id else None
-            target = level_channel if isinstance(level_channel, discord.TextChannel) else message.channel
-
-            embed = discord.Embed(
-                title="🎉  LEVEL UP!",
-                description=(
-                    f"Congratulations, {message.author.mention}!\n\n"
-                    f"🏆 **Current Level**\n**{new_level}**\n\n"
-                    f"📊 **Total XP**\n**{new_xp:,} XP**\n\n"
-                    f"⭐ **XP to Next Level**\n**{xp_to_next_level(new_xp):,} XP**"
-                ),
-                color=discord.Color.from_rgb(184, 28, 48),
+            await message.channel.send(
+                f"🎉 {message.author.mention} reached **Level {xp_level(new_xp)}**!"
             )
-            embed.set_thumbnail(url=message.author.display_avatar.url)
-            embed.set_footer(text=f"{message.guild.name} • Keep chatting to climb the leaderboard!")
-            await target.send(embed=embed)
-        except Exception as e:
-            print("LEVEL UP ERROR:", repr(e))
+        except Exception:
+            pass
 
-    if new_xp % 100 < 20 or new_level > old_level:
+    if new_xp % 100 < 20:
         save()
 
     await bot.process_commands(message)
@@ -535,17 +493,42 @@ async def badword(interaction, word: str):
     save()
     await reply(interaction, f"🚫 Added `{word}` to bad-word filter.")
 
-@tree.command(
-    name="setlog",
-    description="Set this channel as log channel"
-)
+@tree.command(name="setlog", description="Set this channel as log channel")
 @app_commands.checks.has_permissions(manage_guild=True)
-async def setlog(interaction: discord.Interaction):
-
-    D["logs"][gid(interaction.guild)] = str(interaction.channel.id)
+async def setlog(interaction):
+    D["logs"][gid(interaction.guild)] = interaction.channel.id
     save()
+    await reply(interaction, "📊 Log channel set.")
 
-    await reply(
-        interaction,
-        f"✅ Log channel set to {interaction.channel.mention}"
-    )
+@tree.command(name="welcome", description="Set welcome channel and message")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def welcome(interaction, channel: discord.TextChannel,
+                  message: str = "👋 Welcome {user} to **{server}**!"):
+    D["welcome"][gid(interaction.guild)] = {"channel": channel.id, "message": message}
+    save()
+    await reply(interaction, f"👋 Welcome set to {channel.mention}")
+
+@tree.command(name="autorole", description="Set auto role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def autorole(interaction, role: discord.Role):
+    me = interaction.guild.me
+    if not me or role >= me.top_role:
+        return await reply(interaction, "❌ The role must be below my bot role.", ephemeral=True)
+    D["autorole"][gid(interaction.guild)] = role.id
+    save()
+    await reply(interaction, f"🎭 Auto role: **{role.name}**")
+
+@tree.command(name="addrole", description="Add role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def addrole(interaction, member: discord.Member, role: discord.Role):
+    if role >= interaction.guild.me.top_role:
+        return await reply(interaction, "❌ I cannot manage this role.", ephemeral=True)
+    try:
+        await member.add_roles(role)
+        await reply(interaction, f"🎭 Added **{role.name}** to {member.mention}")
+    except Exception as e:
+        await reply(interaction, f"❌ Failed: `{type(e).__name__}`", ephemeral=True)
+
+@tree.command(name="removerole", description="Remove role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def removerole(interaction, mem
