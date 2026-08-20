@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install discord.py
-        run: pip install discord.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run Discord Bot
         env:
