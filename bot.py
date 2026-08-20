@@ -535,7 +535,17 @@ async def badword(interaction, word: str):
     save()
     await reply(interaction, f"🚫 Added `{word}` to bad-word filter.")
 
-@tree.command(name="setlog", description="Set this channel as log channel")
+@tree.command(
+    name="setlog",
+    description="Set this channel as log channel"
+)
 @app_commands.checks.has_permissions(manage_guild=True)
-async def setlog(interaction):
-    D["logs"][gid(i
+async def setlog(interaction: discord.Interaction):
+
+    D["logs"][gid(interaction.guild)] = str(interaction.channel.id)
+    save()
+
+    await reply(
+        interaction,
+        f"✅ Log channel set to {interaction.channel.mention}"
+    )
