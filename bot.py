@@ -943,7 +943,6 @@ async def slowmode(
         )
 
     except Exception as e:
-
     await reply(
         interaction,
         f"❌ Failed: `{type(e).__name__}`",
