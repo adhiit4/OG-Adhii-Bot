@@ -2,7 +2,7 @@ import os
 import json
 import random
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import discord
 from discord import app_commands
@@ -18,9 +18,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN secret is missing")
 
-DATA = "data.json"
-
-# Welcome banner file
+DATA_FILE = "data.json"
 WELCOME_IMAGE = "welcome.png"
 
 
@@ -37,17 +35,15 @@ DEFAULT_DATA = {
     "badwords": {},
     "antilink": {},
     "antispam": {},
-    "verify": {},
-    "tickets": {},
-    "ticket_setup": {},
 }
 
-try:
-    with open(DATA, "r", encoding="utf-8") as f:
-        D = json.load(f)
 
+try:
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        D = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
     D = {}
+
 
 for key, value in DEFAULT_DATA.items():
     D.setdefault(key, value)
@@ -55,36 +51,50 @@ for key, value in DEFAULT_DATA.items():
 
 def save():
     try:
-        with open(DATA, "w", encoding="utf-8") as f:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(D, f, indent=2)
-
     except Exception as e:
         print("SAVE ERROR:", repr(e))
-
-
-# =========================================================
-# DISCORD
-# =========================================================
-
-I = discord.Intents.default()
-
-I.guilds = True
-I.members = True
-I.messages = True
-I.message_content = True
-I.voice_states = True
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=I
-)
-
-tree = bot.tree
 
 
 def gid(guild):
     return str(guild.id)
 
+
+# =========================================================
+# DISCORD SETUP
+# =========================================================
+
+intents = discord.Intents.default()
+
+intents.guilds = True
+intents.members = True
+intents.messages = True
+intents.message_content = True
+intents.voice_states = True
+
+
+class OGAhdiBot(commands.Bot):
+
+    async def setup_hook(self):
+        try:
+            synced = await self.tree.sync()
+            print(f"SYNCED COMMANDS: {len(synced)}")
+        except Exception as e:
+            print("SYNC ERROR:", repr(e))
+
+
+bot = OGAhdiBot(
+    command_prefix="!",
+    intents=intents
+)
+
+tree = bot.tree
+
+
+# =========================================================
+# HELPERS
+# =========================================================
 
 async def reply(
     interaction,
@@ -110,31 +120,27 @@ async def reply(
         print("REPLY ERROR:", repr(e))
 
 
-async def log(
+async def send_log(
     guild,
     title,
-    text,
+    description,
     color=discord.Color.blurple()
 ):
     try:
-        if not guild:
+        channel_id = D["logs"].get(gid(guild))
+
+        if not channel_id:
             return
 
-        cid = D["logs"].get(gid(guild))
-
-        if not cid:
-            return
-
-        channel = guild.get_channel(int(cid))
+        channel = guild.get_channel(int(channel_id))
 
         if not channel:
             return
 
         embed = discord.Embed(
             title=title,
-            description=text[:4000],
-            color=color,
-            timestamp=datetime.now(timezone.utc)
+            description=description[:4000],
+            color=color
         )
 
         await channel.send(embed=embed)
@@ -153,10 +159,11 @@ def xp_level(xp):
 
 @bot.event
 async def on_ready():
+
     print("--------------------------------")
-    print(f"ONLINE: {bot.user}")
+    print(f"BOT ONLINE: {bot.user}")
     print(f"BOT ID: {bot.user.id}")
-    print(f"COMMANDS: {len(tree.get_commands())}")
+    print(f"SERVERS: {len(bot.guilds)}")
     print("--------------------------------")
 
 
@@ -167,21 +174,26 @@ async def on_ready():
 @bot.event
 async def on_member_join(member):
 
+    guild_id = gid(member.guild)
+
     # -----------------------------------------------------
     # AUTO ROLE
     # -----------------------------------------------------
 
     try:
-        role_id = D["autorole"].get(gid(member.guild))
+
+        role_id = D["autorole"].get(guild_id)
 
         if role_id:
+
             role = member.guild.get_role(int(role_id))
             me = member.guild.me
 
             if role and me and role < me.top_role:
+
                 await member.add_roles(
                     role,
-                    reason="OG ADHII Auto Role"
+                    reason="OG Adhii Auto Role"
                 )
 
     except Exception as e:
@@ -189,21 +201,24 @@ async def on_member_join(member):
 
 
     # -----------------------------------------------------
-    # WELCOME MESSAGE + BANNER
+    # WELCOME
     # -----------------------------------------------------
 
     try:
-        data = D["welcome"].get(gid(member.guild))
 
-        if data:
+        welcome_data = D["welcome"].get(guild_id)
+
+        if welcome_data:
+
+            channel_id = welcome_data.get("channel")
 
             channel = member.guild.get_channel(
-                int(data["channel"])
-            )
+                int(channel_id)
+            ) if channel_id else None
 
             if channel:
 
-                message = data.get(
+                message = welcome_data.get(
                     "message",
                     "👋 Welcome {user} to **{server}**!"
                 )
@@ -218,9 +233,8 @@ async def on_member_join(member):
                     member.guild.name
                 )
 
-
                 # -----------------------------------------
-                # SEND BANNER IF FILE EXISTS
+                # SEND WELCOME IMAGE
                 # -----------------------------------------
 
                 if os.path.exists(WELCOME_IMAGE):
@@ -230,29 +244,36 @@ async def on_member_join(member):
                         filename="welcome.png"
                     )
 
+                    embed = discord.Embed(
+                        description=message,
+                        color=discord.Color.blurple()
+                    )
+
+                    embed.set_image(
+                        url="attachment://welcome.png"
+                    )
+
+                    embed.set_footer(
+                        text=f"Member #{member.guild.member_count}"
+                    )
+
                     await channel.send(
-                        content=message,
+                        embed=embed,
                         file=file
                     )
 
                 else:
 
-                    # If banner is missing, send text only
                     await channel.send(message)
-
-                    print(
-                        "WARNING: welcome.png not found. "
-                        "Upload it to the project folder."
-                    )
 
     except Exception as e:
         print("WELCOME ERROR:", repr(e))
 
 
-    await log(
+    await send_log(
         member.guild,
         "📥 Member Joined",
-        f"{member.mention} joined."
+        f"{member.mention} joined the server."
     )
 
 
@@ -263,10 +284,10 @@ async def on_member_join(member):
 @bot.event
 async def on_member_remove(member):
 
-    await log(
+    await send_log(
         member.guild,
         "📤 Member Left",
-        f"**{member}** left."
+        f"**{member}** left the server."
     )
 
 
@@ -281,113 +302,76 @@ async def on_member_update(before, after):
 
         if before.nick != after.nick:
 
-            await log(
+            await send_log(
                 after.guild,
                 "✏️ Nickname Changed",
-                f"{after.mention}: "
-                f"`{before.nick}` → `{after.nick}`"
-            )
-
-
-        before_roles = {
-            r.id for r in before.roles
-        }
-
-        after_roles = {
-            r.id for r in after.roles
-        }
-
-
-        if before_roles != after_roles:
-
-            added = [
-                r.name
-                for r in after.roles
-                if r.id not in before_roles
-            ]
-
-            removed = [
-                r.name
-                for r in before.roles
-                if r.id not in after_roles
-            ]
-
-            await log(
-                after.guild,
-                "🎭 Role Change",
                 f"{after.mention}\n"
-                f"Added: "
-                f"{', '.join(added) if added else 'None'}\n"
-                f"Removed: "
-                f"{', '.join(removed) if removed else 'None'}"
+                f"Before: `{before.nick}`\n"
+                f"After: `{after.nick}`"
             )
 
     except Exception as e:
-        print("MEMBER UPDATE ERROR:", repr(e))
+        print("NICK ERROR:", repr(e))
 
 
 # =========================================================
-# MESSAGE DELETE LOG
+# MESSAGE DELETE
 # =========================================================
 
 @bot.event
 async def on_message_delete(message):
 
-    try:
+    if not message.guild:
+        return
 
-        if (
-            message.guild
-            and message.author
-            and not message.author.bot
-        ):
+    if message.author.bot:
+        return
 
-            await log(
-                message.guild,
-                "🗑️ Message Deleted",
-                f"{message.author.mention} "
-                f"in {message.channel.mention}\n"
-                f"`{message.content[:1200] or '[no text]'}`"
-            )
-
-    except Exception as e:
-        print("DELETE LOG ERROR:", repr(e))
+    await send_log(
+        message.guild,
+        "🗑️ Message Deleted",
+        f"{message.author.mention} in "
+        f"{message.channel.mention}\n\n"
+        f"`{message.content[:1500] or '[No text]'}`"
+    )
 
 
 # =========================================================
-# MESSAGE EDIT LOG
+# MESSAGE EDIT
 # =========================================================
 
 @bot.event
 async def on_message_edit(before, after):
 
-    try:
+    if not after.guild:
+        return
 
-        if (
-            after.guild
-            and after.author
-            and not after.author.bot
-            and before.content != after.content
-        ):
+    if after.author.bot:
+        return
 
-            await log(
-                after.guild,
-                "✏️ Message Edited",
-                f"{after.author.mention} "
-                f"in {after.channel.mention}\n"
-                f"Before: `{before.content[:600]}`\n"
-                f"After: `{after.content[:600]}`"
-            )
+    if before.content == after.content:
+        return
 
-    except Exception as e:
-        print("EDIT LOG ERROR:", repr(e))
+    await send_log(
+        after.guild,
+        "✏️ Message Edited",
+        f"{after.author.mention} in "
+        f"{after.channel.mention}\n\n"
+        f"Before:\n`{before.content[:700]}`\n\n"
+        f"After:\n`{after.content[:700]}`"
+    )
 
 
 # =========================================================
-# MESSAGE / SECURITY
+# SPAM STORAGE
 # =========================================================
 
-spam = {}
+spam_tracker = {}
 
+
+# =========================================================
+# MESSAGE EVENT
+# =========================================================
 
 @bot.event
 async def on_message(message):
@@ -398,60 +382,67 @@ async def on_message(message):
     if not message.guild:
         return
 
-
     guild_id = gid(message.guild)
 
-    content_lower = message.content.lower()
+    content = message.content.lower()
 
 
     # =====================================================
     # ANTI LINK
     # =====================================================
 
-    if (
-        D["antilink"].get(guild_id)
-        and re.search(
+    if D["antilink"].get(guild_id):
+
+        has_link = re.search(
             r"https?://|www\.",
             message.content,
             re.IGNORECASE
         )
-        and not message.author.guild_permissions.manage_messages
-    ):
 
-        try:
+        if (
+            has_link
+            and not message.author.guild_permissions.manage_messages
+        ):
 
-            await message.delete()
+            try:
 
-            await message.channel.send(
-                f"🚫 {message.author.mention} "
-                f"links are disabled.",
-                delete_after=3
-            )
+                await message.delete()
 
-        except Exception as e:
-            print("ANTILINK ERROR:", repr(e))
+                await message.channel.send(
+                    f"🚫 {message.author.mention} "
+                    f"links are disabled.",
+                    delete_after=3
+                )
 
-        return
+            except Exception as e:
+                print("ANTILINK ERROR:", repr(e))
+
+            return
 
 
     # =====================================================
-    # BAD WORD
+    # BAD WORDS
     # =====================================================
 
-    words = D["badwords"].get(
+    bad_words = D["badwords"].get(
         guild_id,
         []
     )
 
+    found_badword = False
+
+    for word in bad_words:
+
+        if re.search(
+            r"\b" + re.escape(word) + r"\b",
+            content
+        ):
+            found_badword = True
+            break
+
 
     if (
-        any(
-            re.search(
-                r"\b" + re.escape(w) + r"\b",
-                content_lower
-            )
-            for w in words
-        )
+        found_badword
         and not message.author.guild_permissions.manage_messages
     ):
 
@@ -485,11 +476,9 @@ async def on_message(message):
             message.author.id
         )
 
-        now = datetime.now(
-            timezone.utc
-        ).timestamp()
+        now = discord.utils.utcnow().timestamp()
 
-        queue = spam.setdefault(
+        queue = spam_tracker.setdefault(
             key,
             []
         )
@@ -501,14 +490,13 @@ async def on_message(message):
 
         queue.append(now)
 
-
         if len(queue) >= 6:
 
             try:
 
                 await message.author.timeout(
                     timedelta(minutes=1),
-                    reason="Anti-spam"
+                    reason="OG Adhii Anti-Spam"
                 )
 
                 await message.delete()
@@ -531,31 +519,37 @@ async def on_message(message):
     # XP
     # =====================================================
 
-    key = f"{guild_id}:{message.author.id}"
+    xp_key = (
+        f"{guild_id}:"
+        f"{message.author.id}"
+    )
 
     old_xp = int(
         D["xp"].get(
-            key,
+            xp_key,
             0
         )
     )
 
     new_xp = (
-        old_xp
-        + random.randint(5, 15)
+        old_xp +
+        random.randint(5, 15)
     )
 
-    D["xp"][key] = new_xp
+    D["xp"][xp_key] = new_xp
 
 
-    if xp_level(new_xp) > xp_level(old_xp):
+    old_level = xp_level(old_xp)
+    new_level = xp_level(new_xp)
+
+
+    if new_level > old_level:
 
         try:
 
             await message.channel.send(
                 f"🎉 {message.author.mention} "
-                f"reached **Level "
-                f"{xp_level(new_xp)}**!"
+                f"reached **Level {new_level}**!"
             )
 
         except Exception:
@@ -570,7 +564,7 @@ async def on_message(message):
 
 
 # =========================================================
-# MODERATION
+# BAN
 # =========================================================
 
 @tree.command(
@@ -581,7 +575,7 @@ async def on_message(message):
     ban_members=True
 )
 async def ban(
-    interaction,
+    interaction: discord.Interaction,
     member: discord.Member,
     reason: str = "No reason provided"
 ):
@@ -597,12 +591,12 @@ async def ban(
             f"🔨 Banned {member.mention}"
         )
 
-        await log(
+        await send_log(
             interaction.guild,
-            "🔨 Ban",
-            f"{member} by "
-            f"{interaction.user.mention}\n"
-            f"{reason}",
+            "🔨 Member Banned",
+            f"{member}\n"
+            f"By: {interaction.user.mention}\n"
+            f"Reason: {reason}",
             discord.Color.red()
         )
 
@@ -610,8 +604,7 @@ async def ban(
 
         await reply(
             interaction,
-            "❌ I cannot ban this member. "
-            "Check role hierarchy and permissions.",
+            "❌ I cannot ban this member.",
             ephemeral=True
         )
 
@@ -628,7 +621,7 @@ async def ban(
     kick_members=True
 )
 async def kick(
-    interaction,
+    interaction: discord.Interaction,
     member: discord.Member,
     reason: str = "No reason provided"
 ):
@@ -665,7 +658,7 @@ async def kick(
     moderate_members=True
 )
 async def timeout(
-    interaction,
+    interaction: discord.Interaction,
     member: discord.Member,
     minutes: int = 10,
     reason: str = "No reason provided"
@@ -685,52 +678,7 @@ async def timeout(
 
         await reply(
             interaction,
-            f"⏳ {member.mention} "
-            f"timed out for "
-            f"**{minutes} minutes**."
-        )
-
-    except discord.Forbidden:
-
-        await reply(
-            interaction,
-            "❌ I cannot timeout this member.",
-            ephemeral=True
-        )
-
-
-# =========================================================
-# MUTE
-# =========================================================
-
-@tree.command(
-    name="mute",
-    description="Mute a member using Discord timeout"
-)
-@app_commands.checks.has_permissions(
-    moderate_members=True
-)
-async def mute(
-    interaction,
-    member: discord.Member,
-    minutes: int = 10
-):
-
-    minutes = max(
-        1,
-        min(minutes, 40320)
-    )
-
-    try:
-
-        await member.timeout(
-            timedelta(minutes=minutes),
-            reason="Mute"
-        )
-
-        await reply(
-            interaction,
-            f"🔇 Muted {member.mention} "
+            f"⏳ {member.mention} timed out "
             f"for **{minutes} minutes**."
         )
 
@@ -738,7 +686,7 @@ async def mute(
 
         await reply(
             interaction,
-            "❌ I cannot mute this member.",
+            "❌ I cannot timeout this member.",
             ephemeral=True
         )
 
@@ -755,7 +703,7 @@ async def mute(
     moderate_members=True
 )
 async def unmute(
-    interaction,
+    interaction: discord.Interaction,
     member: discord.Member
 ):
 
@@ -775,7 +723,7 @@ async def unmute(
 
         await reply(
             interaction,
-            "❌ I cannot remove this timeout.",
+            "❌ I cannot unmute this member.",
             ephemeral=True
         )
 
@@ -792,7 +740,7 @@ async def unmute(
     moderate_members=True
 )
 async def warn(
-    interaction,
+    interaction: discord.Interaction,
     member: discord.Member,
     reason: str = "No reason provided"
 ):
@@ -811,19 +759,12 @@ async def warn(
 
     save()
 
+    total = D["warns"][key]
+
     await reply(
         interaction,
         f"⚠️ {member.mention} warned.\n"
-        f"Total warnings: "
-        f"**{D['warns'][key]}**\n"
-        f"Reason: {reason}"
-    )
-
-    await log(
-        interaction.guild,
-        "⚠️ Warning",
-        f"{member.mention} warned by "
-        f"{interaction.user.mention}\n"
+        f"Warnings: **{total}**\n"
         f"Reason: {reason}"
     )
 
@@ -834,17 +775,17 @@ async def warn(
 
 @tree.command(
     name="clear",
-    description="Delete up to 100 messages"
+    description="Delete messages"
 )
 @app_commands.checks.has_permissions(
     manage_messages=True
 )
 async def clear(
-    interaction,
+    interaction: discord.Interaction,
     amount: int = 10
 ):
 
-    if not 1 <= amount <= 100:
+    if amount < 1 or amount > 100:
 
         return await reply(
             interaction,
@@ -853,9 +794,7 @@ async def clear(
         )
 
 
-    await reply(
-        interaction,
-        "🧹 Clearing...",
+    await interaction.response.defer(
         ephemeral=True
     )
 
@@ -866,17 +805,15 @@ async def clear(
             limit=amount
         )
 
-        await interaction.channel.send(
+        await interaction.followup.send(
             f"🧹 Cleared **{len(deleted)}** messages.",
-            delete_after=3
+            ephemeral=True
         )
 
     except Exception as e:
 
-        await reply(
-            interaction,
-            f"❌ Clear failed: "
-            f"`{type(e).__name__}`",
+        await interaction.followup.send(
+            f"❌ Clear failed: `{type(e).__name__}`",
             ephemeral=True
         )
 
@@ -893,14 +830,11 @@ async def clear(
     manage_channels=True
 )
 async def lock(
-    interaction,
+    interaction: discord.Interaction,
     channel: discord.TextChannel = None
 ):
 
-    channel = (
-        channel
-        or interaction.channel
-    )
+    channel = channel or interaction.channel
 
     try:
 
@@ -925,8 +859,7 @@ async def lock(
 
         await reply(
             interaction,
-            f"❌ Lock failed: "
-            f"`{type(e).__name__}`",
+            f"❌ Lock failed: `{type(e).__name__}`",
             ephemeral=True
         )
 
@@ -943,14 +876,11 @@ async def lock(
     manage_channels=True
 )
 async def unlock(
-    interaction,
+    interaction: discord.Interaction,
     channel: discord.TextChannel = None
 ):
 
-    channel = (
-        channel
-        or interaction.channel
-    )
+    channel = channel or interaction.channel
 
     try:
 
@@ -960,4 +890,61 @@ async def unlock(
 
         overwrite.send_messages = None
 
-        awai
+        await channel.set_permissions(
+            interaction.guild.default_role,
+            overwrite=overwrite,
+            reason=f"Unlocked by {interaction.user}"
+        )
+
+        await reply(
+            interaction,
+            f"🔓 Unlocked {channel.mention}"
+        )
+
+    except Exception as e:
+
+        await reply(
+            interaction,
+            f"❌ Unlock failed: `{type(e).__name__}`",
+            ephemeral=True
+        )
+
+
+# =========================================================
+# SLOWMODE
+# =========================================================
+
+@tree.command(
+    name="slowmode",
+    description="Set channel slowmode"
+)
+@app_commands.checks.has_permissions(
+    manage_channels=True
+)
+async def slowmode(
+    interaction: discord.Interaction,
+    seconds: int = 0
+):
+
+    seconds = max(
+        0,
+        min(seconds, 21600)
+    )
+
+    try:
+
+        await interaction.channel.edit(
+            slowmode_delay=seconds
+        )
+
+        await reply(
+            interaction,
+            f"🐢 Slowmode set to **{seconds}s**."
+        )
+
+    except Exception as e:
+
+        await reply(
+            interaction,
+            f"❌ Failed: `{type(e).__name__}`",
+            ephemeral=Tru
