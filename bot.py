@@ -535,7 +535,13 @@ async def badword(interaction, word: str):
     save()
     await reply(interaction, f"🚫 Added `{word}` to bad-word filter.")
 
-@tree.command(name="setlog", description="Set this channel as log channel")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def setlog(interaction):
-    D["logs"][gid(i
+@tree.command(name="removerole", description="Remove role")
+@app_commands.checks.has_permissions(manage_roles=True)
+async def removerole(interaction, member: discord.Member, role: discord.Role):
+    if role >= interaction.guild.me.top_role:
+        return await reply(interaction, "❌ I cannot manage this role.", ephemeral=True)
+    try:
+        await member.remove_roles(role)
+        await reply(interaction, f"🎭 Removed **{role.name}** from {member.mention}")
+    except Exception as e:
+        await reply(interaction, f"❌ Failed: `{type(e).__name__}`", ephemeral=True)
