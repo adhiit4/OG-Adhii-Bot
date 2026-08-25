@@ -108,9 +108,13 @@ def xp_level(xp):
 @bot.event
 async def on_ready():
     print(f"ONLINE: {bot.user} | ID: {bot.user.id}")
-    print(f"COMMANDS: {len(tree.get_commands())}")
 
-    # Reconnect to every server's saved 24/7 voice channel after a restart.
+    try:
+        synced = await tree.sync()
+        print(f"SYNCED {len(synced)} SLASH COMMANDS")
+    except Exception as e:
+        print("SYNC ERROR:", repr(e))
+
     for guild_id, channel_id in D.get("voice", {}).items():
         guild = bot.get_guild(int(guild_id))
         if guild:
