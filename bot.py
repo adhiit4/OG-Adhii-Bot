@@ -1332,7 +1332,7 @@ async def command_error(interaction, error):
         f"❌ Command failed.\n`{type(error).__name__}: {str(error)[:500]}`",
         ephemeral=True,
     )
-: app = Flask(name) @app .route("/") def home(): return "Bot is running!" def run_web(): app .run(host = "0.0.0.0", port = 8080) Thread(target=run_web).start().
+ app = Flask(name) @app .route("/") def home(): return "Bot is running!" def run_web(): app .run(host = "0.0.0.0", port = 8080) Thread(target=run_web).start().
 # =========================================================
 # RUN
 # =========================================================
